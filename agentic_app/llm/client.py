@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
-
 from agentic_app.config import settings
 
 
@@ -21,6 +19,10 @@ class LLMClient:
             raise RuntimeError(
                 "OPENAI_API_KEY is not configured. Set it in your environment or .env file."
             )
+
+        # Import lazily so test environments that stub the LLM do not require
+        # the OpenAI package at import time.
+        from openai import OpenAI
 
         self._client = OpenAI(api_key=api_key)
         self._model = model or settings.openai_model
@@ -48,4 +50,3 @@ class LLMClient:
             temperature=self._temperature,
         )
         return response.choices[0].message
-
