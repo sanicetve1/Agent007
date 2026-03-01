@@ -11,11 +11,15 @@ Minimal agentic setup that routes natural language math instructions to simple t
 pip install -e .
 ```
 
-3. Copy `.env.example` to `.env` and set:
+3. Configure environment variables:
 
 ```bash
 OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-4.1-mini
+OPENAI_TEMPERATURE=0.0
+ENABLE_MEMORY=false
+MEMORY_TURN_LIMIT=6
+MEMORY_MAX_CHARS_PER_MESSAGE=1000
 ```
 
 ## Usage
@@ -26,9 +30,21 @@ Run a single instruction:
 python -m agentic_app.app "add two numbers: 2 and 3"
 ```
 
-Or start an interactive session:
+Start an interactive session:
 
 ```bash
 python -m agentic_app.app
 ```
 
+## Memory behavior
+
+- Memory is opt-in and controlled by `ENABLE_MEMORY`.
+- When enabled, REPL mode keeps a stable session context for the lifetime of the process.
+- Use `/reset` in REPL mode to clear conversation memory for the current session.
+- Single-run CLI remains stateless by default.
+
+## Testing
+
+```bash
+PYTHONPATH=. pytest -q
+```

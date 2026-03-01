@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from agentic_app.agent.prompt import SYSTEM_PROMPT
 from agentic_app.agent.state import AgentState
+from agentic_app.config import settings
 from agentic_app.llm import LLMClient
 from agentic_app.memory import MemoryStore, MemoryTurn
 from agentic_app.tools import get_tool, get_openai_tool_specs
@@ -17,11 +18,26 @@ class Agent:
         self,
         llm_client: LLMClient | None = None,
         memory_store: Optional[MemoryStore] = None,
-        history_turn_limit: int = 6,
+        history_turn_limit: Optional[int] = None,
+        memory_max_chars_per_message: Optional[int] = None,
     ) -> None:
         self._llm = llm_client or LLMClient()
         self._memory_store = memory_store
-        self._history_turn_limit = max(0, int(history_turn_limit))
+        limit = settings.memory_turn_limit if history_turn_limit is None else history_turn_limit
+        self._history_turn_limit = max(0, int(limit))
+        max_chars = (
+            settings.memory_max_chars_per_message
+            if memory_max_chars_per_message is None
+            else memory_max_chars_per_message
+        )
+        self._memory_max_chars_per_message = max(0, int(max_chars))
+
+    def _truncate_text(self, text: str) -> str:
+        if self._memory_max_chars_per_message <= 0:
+            return text
+        if len(text) <= self._memory_max_chars_per_message:
+            return text
+        return text[: self._memory_max_chars_per_message]
 
     def _build_memory_messages(self, session_id: Optional[str]) -> List[Dict[str, Any]]:
         if not self._memory_store or not session_id:
@@ -33,8 +49,13 @@ class Agent:
 
         messages: List[Dict[str, Any]] = []
         for turn in turns:
-            messages.append({"role": "user", "content": turn.user_input})
-            messages.append({"role": "assistant", "content": turn.assistant_response})
+            messages.append({"role": "user", "content": self._truncate_text(turn.user_input)})
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": self._truncate_text(turn.assistant_response),
+                }
+            )
         return messages
 
     def run(self, user_input: str, session_id: Optional[str] = None) -> AgentState:
@@ -63,12 +84,10 @@ class Agent:
             tools=[spec["function"]["name"] for spec in tools],
         )
 
-        # Ask the LLM to choose a tool and arguments.
         message = self._llm.chat(messages=messages, tools=tools, tool_choice="auto")
 
         tool_calls = getattr(message, "tool_calls", None)
         if not tool_calls:
-            # No tool call requested; treat as a direct answer.
             content = message.content or ""
             state.final_response = content
             state.add_step("no_tool_used", response=content)
@@ -92,7 +111,6 @@ class Agent:
             tool_args=tool_args,
         )
 
-        # Execute the tool.
         tool = get_tool(tool_name)
         try:
             result = tool.run(**tool_args)
@@ -111,7 +129,6 @@ class Agent:
             tool_result=result,
         )
 
-        # Ask the LLM to format the final answer using the result.
         followup_messages: List[Dict[str, Any]] = [
             *messages,
             {
@@ -163,7 +180,10 @@ class Agent:
 
         self._memory_store.append_turn(
             session_id,
-            MemoryTurn(user_input=user_input, assistant_response=assistant_response),
+            MemoryTurn(
+                user_input=self._truncate_text(user_input),
+                assistant_response=self._truncate_text(assistant_response),
+            ),
         )
         state.add_step(
             "memory_saved",

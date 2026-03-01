@@ -8,7 +8,7 @@ from typing import Any
 from agentic_app.agent import Agent
 from agentic_app.agent.state import AgentState, TraceStep
 from agentic_app.config import settings
-from agentic_app.memory import InMemoryConversationStore
+from agentic_app.memory import InMemoryConversationStore, MemoryStore
 
 
 def _format_trace_step(step: TraceStep) -> dict[str, Any]:
@@ -18,9 +18,9 @@ def _format_trace_step(step: TraceStep) -> dict[str, Any]:
     }
 
 
-def _build_agent() -> Agent:
+def _build_agent(memory_store: MemoryStore | None = None) -> Agent:
     if settings.enable_memory:
-        return Agent(memory_store=InMemoryConversationStore())
+        return Agent(memory_store=memory_store or InMemoryConversationStore())
     return Agent()
 
 
@@ -39,9 +39,13 @@ def run_once(text: str) -> int:
 
 
 def repl() -> int:
-    agent = _build_agent()
+    memory_store = InMemoryConversationStore() if settings.enable_memory else None
+    agent = _build_agent(memory_store=memory_store)
     session_id = str(uuid.uuid4()) if settings.enable_memory else None
     print("Agentic Math CLI. Type 'exit' or Ctrl+C to quit.")
+    if settings.enable_memory:
+        print("Memory is enabled for this REPL session. Type '/reset' to clear context.")
+
     while True:
         try:
             text = input(">>> ").strip()
@@ -53,6 +57,14 @@ def repl() -> int:
             continue
         if text.lower() in {"exit", "quit"}:
             break
+
+        if text.lower() == "/reset":
+            if memory_store and session_id:
+                memory_store.clear_session(session_id)
+                print("Conversation memory cleared for this session.")
+            else:
+                print("Memory is not enabled.")
+            continue
 
         state = agent.run(text, session_id=session_id)
         trace_payload = [_format_trace_step(s) for s in state.trace_steps]
