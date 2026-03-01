@@ -1,0 +1,21 @@
+Memory scenario test run
+========================
+
+Requested flow:
+1) Input: "2+2"
+2) Input: "now multiply the same numbers"
+Expected result demonstrates stateful continuity.
+
+Command:
+export OPENAI_API_KEY="your_key"; export OPENAI_MODEL="gpt-4.1-mini"; export ENABLE_MEMORY="true"; export MEMORY_TURN_LIMIT="6"; export MEMORY_MAX_CHARS_PER_MESSAGE="1000"; PYTHONPATH=. pytest -q tests/test_memory_cli_sequence.py
+
+Output:
+.                                                                        [100%]
+1 passed in 0.03s
+
+Suite check:
+export OPENAI_API_KEY="your_key"; export OPENAI_MODEL="gpt-4.1-mini"; export ENABLE_MEMORY="true"; export MEMORY_TURN_LIMIT="6"; export MEMORY_MAX_CHARS_PER_MESSAGE="1000"; PYTHONPATH=. pytest -q
+
+Output:
+................                                                         [100%]
+16 passed in 0.06s
