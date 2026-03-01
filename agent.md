@@ -159,3 +159,5 @@ This trace must be explicit, structured, and visible in the CLI, without exposin
 4. use .env file for api keys and other configurable paths required for the app. 
 
 
+
+this is a a test comment from codex
