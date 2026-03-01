@@ -1,0 +1,2 @@
+[console_scripts]
+agentic-math = agentic_app.app:main
