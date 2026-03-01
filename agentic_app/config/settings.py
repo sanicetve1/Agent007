@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - environment-specific fallback
+    def load_dotenv() -> bool:
+        return False
 
 
 load_dotenv()
@@ -17,6 +21,10 @@ class Settings:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
     enable_memory: bool = os.getenv("ENABLE_MEMORY", "false").lower() == "true"
+    memory_turn_limit: int = int(os.getenv("MEMORY_TURN_LIMIT", "6"))
+    memory_max_chars_per_message: int = int(
+        os.getenv("MEMORY_MAX_CHARS_PER_MESSAGE", "1000")
+    )
 
     def validate(self) -> None:
         if not self.openai_api_key:
@@ -26,4 +34,3 @@ class Settings:
 
 
 settings = Settings()
-

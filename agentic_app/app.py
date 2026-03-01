@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import uuid
 from typing import Any
 
 from agentic_app.agent import Agent
 from agentic_app.agent.state import AgentState, TraceStep
+from agentic_app.config import settings
+from agentic_app.memory import InMemoryConversationStore, MemoryStore
 
 
 def _format_trace_step(step: TraceStep) -> dict[str, Any]:
@@ -16,8 +18,14 @@ def _format_trace_step(step: TraceStep) -> dict[str, Any]:
     }
 
 
+def _build_agent(memory_store: MemoryStore | None = None) -> Agent:
+    if settings.enable_memory:
+        return Agent(memory_store=memory_store or InMemoryConversationStore())
+    return Agent()
+
+
 def run_once(text: str) -> int:
-    agent = Agent()
+    agent = _build_agent()
     state: AgentState = agent.run(text)
 
     trace_payload = [_format_trace_step(s) for s in state.trace_steps]
@@ -31,8 +39,13 @@ def run_once(text: str) -> int:
 
 
 def repl() -> int:
-    agent = Agent()
+    memory_store = InMemoryConversationStore() if settings.enable_memory else None
+    agent = _build_agent(memory_store=memory_store)
+    session_id = str(uuid.uuid4()) if settings.enable_memory else None
     print("Agentic Math CLI. Type 'exit' or Ctrl+C to quit.")
+    if settings.enable_memory:
+        print("Memory is enabled for this REPL session. Type '/reset' to clear context.")
+
     while True:
         try:
             text = input(">>> ").strip()
@@ -45,7 +58,15 @@ def repl() -> int:
         if text.lower() in {"exit", "quit"}:
             break
 
-        state = agent.run(text)
+        if text.lower() == "/reset":
+            if memory_store and session_id:
+                memory_store.clear_session(session_id)
+                print("Conversation memory cleared for this session.")
+            else:
+                print("Memory is not enabled.")
+            continue
+
+        state = agent.run(text, session_id=session_id)
         trace_payload = [_format_trace_step(s) for s in state.trace_steps]
         print("=== Execution Trace ===")
         print(json.dumps(trace_payload, indent=2))
@@ -74,4 +95,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-
