@@ -1,111 +1,55 @@
+"""Core agent: runs the LangGraph and maps result to AgentState (backward-compatible)."""
+
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List
+from typing import Any, Optional
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.runnables import Runnable
 
 from agentic_app.agent.prompt import SYSTEM_PROMPT
-from agentic_app.agent.state import AgentState
-from agentic_app.llm import LLMClient
-from agentic_app.tools import get_tool, get_openai_tool_specs
+from agentic_app.agent.state import AgentState, TraceStep
+from agentic_app.graph import build_graph
 
 
 class Agent:
-    """Core agent loop that routes user input through the LLM and tools."""
+    """Runs the LangGraph agent and returns the same AgentState interface as before."""
 
-    def __init__(self, llm_client: LLMClient | None = None) -> None:
-        self._llm = llm_client or LLMClient()
+    def __init__(self, llm: Optional[Runnable] = None) -> None:
+        self._llm = llm
 
     def run(self, user_input: str) -> AgentState:
-        state = AgentState(user_input=user_input)
-        state.add_step("received_input", user_input=user_input)
+        graph = build_graph(llm=self._llm)
+        initial: dict[str, Any] = {
+            "messages": [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=user_input),
+            ],
+            "trace": [{"step": "received_input", "info": {"user_input": user_input}}],
+            "steps": 0,
+        }
+        result = graph.invoke(initial)
 
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
+        trace_steps = [
+            TraceStep(step=t["step"], info=t.get("info", {}))
+            for t in (result.get("trace") or [])
+            if isinstance(t, dict)
         ]
 
-        tools = get_openai_tool_specs()
-        state.add_step(
-            "tools_available",
-            tools=[spec["function"]["name"] for spec in tools],
+        messages = result.get("messages") or []
+        if result.get("error"):
+            final_response = result["error"]
+        elif messages:
+            last = messages[-1]
+            final_response = getattr(last, "content", None) or ""
+        else:
+            final_response = ""
+
+        return AgentState(
+            user_input=user_input,
+            selected_tool=result.get("last_tool_name"),
+            tool_args=result.get("last_tool_args") or {},
+            tool_result=result.get("last_tool_result"),
+            final_response=final_response,
+            trace_steps=trace_steps,
         )
-
-        # Ask the LLM to choose a tool and arguments.
-        message = self._llm.chat(messages=messages, tools=tools, tool_choice="auto")
-
-        tool_calls = getattr(message, "tool_calls", None)
-        if not tool_calls:
-            # No tool call requested; treat as a direct answer.
-            content = message.content or ""
-            state.final_response = content
-            state.add_step("no_tool_used", response=content)
-            return state
-
-        tool_call = tool_calls[0]
-        tool_name = tool_call.function.name
-        raw_arguments = tool_call.function.arguments or "{}"
-
-        try:
-            tool_args: Dict[str, Any] = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            tool_args = {}
-
-        state.selected_tool = tool_name
-        state.tool_args = tool_args
-        state.add_step(
-            "tool_selected",
-            tool_name=tool_name,
-            tool_args=tool_args,
-        )
-
-        # Execute the tool.
-        tool = get_tool(tool_name)
-        try:
-            result = tool.run(**tool_args)
-        except Exception as exc:
-            state.tool_result = None
-            state.add_step("tool_error", error=str(exc))
-            state.final_response = f"Tool '{tool_name}' failed: {exc}"
-            return state
-
-        state.tool_result = result
-        state.add_step(
-            "tool_executed",
-            tool_name=tool_name,
-            tool_args=tool_args,
-            tool_result=result,
-        )
-
-        # Ask the LLM to format the final answer using the result.
-        followup_messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_input},
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_name,
-                            "arguments": json.dumps(tool_args),
-                        },
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": tool_name,
-                "content": json.dumps({"result": result}),
-            },
-        ]
-
-        final_message = self._llm.chat(messages=followup_messages, tools=None, tool_choice=None)
-        final_content = final_message.content or ""
-
-        state.final_response = final_content
-        state.add_step("final_response", response=final_content)
-
-        return state
-
