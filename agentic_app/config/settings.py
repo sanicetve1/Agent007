@@ -17,6 +17,11 @@ class Settings:
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     temperature: float = float(os.getenv("OPENAI_TEMPERATURE", "0.0"))
     enable_memory: bool = os.getenv("ENABLE_MEMORY", "false").lower() == "true"
+    max_memory_messages: int = int(os.getenv("MAX_MEMORY_MESSAGES", "50"))
+    enable_guards: bool = os.getenv("ENABLE_GUARDS", "true").lower() == "true"
+    max_steps: int = int(os.getenv("MAX_STEPS", "4"))
+     # Planner + executor toggle
+    enable_planning: bool = os.getenv("ENABLE_PLANNING", "false").lower() == "true"
 
     def validate(self) -> None:
         if not self.openai_api_key:

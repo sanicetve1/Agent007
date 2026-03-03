@@ -2,10 +2,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+agent-ui/node_modules/
+agent-ui/dist/
 *.pyc
 *.pyo
 *.pyd
 *.log
 
 .DS_Store
-
+commands-git.txt

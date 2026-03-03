@@ -18,6 +18,8 @@ OPENAI_API_KEY=your_key_here
 OPENAI_MODEL=gpt-4.1-mini
 ```
 
+Optional: `ENABLE_MEMORY=true` (REPL keeps context), `ENABLE_GUARDS=true`, `MAX_MEMORY_MESSAGES=50`, `MAX_STEPS=4`.
+
 ## Usage
 
 Run a single instruction:

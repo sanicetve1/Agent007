@@ -7,6 +7,8 @@ from typing import Any
 
 from agentic_app.agent import Agent
 from agentic_app.agent.state import AgentState, TraceStep
+from agentic_app.config import settings
+from agentic_app.memory import ConversationMemory
 
 
 def _format_trace_step(step: TraceStep) -> dict[str, Any]:
@@ -17,7 +19,7 @@ def _format_trace_step(step: TraceStep) -> dict[str, Any]:
 
 
 def run_once(text: str) -> int:
-    agent = Agent()
+    agent = Agent(memory=None)
     state: AgentState = agent.run(text)
 
     trace_payload = [_format_trace_step(s) for s in state.trace_steps]
@@ -31,7 +33,8 @@ def run_once(text: str) -> int:
 
 
 def repl() -> int:
-    agent = Agent()
+    memory = ConversationMemory(max_messages=settings.max_memory_messages) if settings.enable_memory else None
+    agent = Agent(memory=memory)
     print("Agentic Math CLI. Type 'exit' or Ctrl+C to quit.")
     while True:
         try:
