@@ -2,6 +2,9 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+Loan_Agent/.env
+Loan_Agent/.env.*
+!Loan_Agent/.env.example
 agent-ui/node_modules/
 agent-ui/dist/
 *.pyc
@@ -11,3 +14,4 @@ agent-ui/dist/
 
 .DS_Store
 commands-git.txt
+*.code-workspace
