@@ -33,6 +33,9 @@ type LlmOutcomeAnalysis = {
   key_strengths?: string[];
   key_risks?: string[];
   next_actions?: string[];
+  customer_information_used?: string[];
+  analysis_findings?: string[];
+  final_verdict?: string;
 };
 
 type AgentTraceStep = {
@@ -40,6 +43,8 @@ type AgentTraceStep = {
   step_type: string;
   detail: Record<string, any>;
 };
+
+type ClarificationOption = { applicant_id: string; full_name: string };
 
 type AgentResult = {
   applicant_id?: string;
@@ -52,6 +57,8 @@ type AgentResult = {
   llm_outcome_analysis?: LlmOutcomeAnalysis;
   agent_mode?: string;
   agent_trace?: AgentTraceStep[];
+  clarification_question?: string;
+  clarification_options?: ClarificationOption[];
   [k: string]: any;
 };
 
@@ -225,18 +232,19 @@ function App() {
   }
 
   /** Send reply after clarification_needed (e.g. paste applicant_id or answer in text). */
-  async function sendClarificationReply() {
+  async function sendClarificationReply(replyOverride?: string) {
     const sessionId = result?.session_id;
-    if (!sessionId || !clarificationReply.trim()) return;
+    const reply = (replyOverride ?? clarificationReply).trim();
+    if (!sessionId || !reply) return;
     setLoading(true);
     setError(null);
     try {
       const data = await callApi("/agent/continue", {
         session_id: sessionId,
-        user_reply: clarificationReply.trim(),
+        user_reply: reply,
       });
       setResult(data);
-      setClarificationReply("");
+      if (!replyOverride) setClarificationReply("");
     } catch (err: any) {
       setError(err.message ?? "Request failed");
     } finally {
@@ -384,16 +392,34 @@ function App() {
             <div className="meta" style={{ marginTop: "1rem", padding: "0.75rem", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8 }}>
               <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>Agent asks for more information</p>
               <p style={{ margin: 0, fontSize: "0.9rem" }}>{result.clarification_question}</p>
+              {result.clarification_options && result.clarification_options.length > 0 && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <p style={{ margin: "0 0 0.35rem", fontSize: "0.85rem", color: "#64748b" }}>Choose customer:</p>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                    {result.clarification_options.map((opt) => (
+                      <button
+                        key={opt.applicant_id}
+                        type="button"
+                        onClick={() => sendClarificationReply(opt.applicant_id)}
+                        disabled={loading}
+                        style={{ padding: "0.35rem 0.6rem", fontSize: "0.85rem", cursor: loading ? "not-allowed" : "pointer" }}
+                      >
+                        {opt.full_name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
                 <input
                   type="text"
-                  placeholder="Paste applicant_id (UUID) or type your answer"
+                  placeholder="Customer name or applicant_id (UUID)"
                   value={clarificationReply}
                   onChange={(e) => setClarificationReply(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && sendClarificationReply()}
                   style={{ flex: 1, padding: "0.4rem 0.6rem" }}
                 />
-                <button onClick={sendClarificationReply} disabled={loading || !clarificationReply.trim()}>
+                <button onClick={() => sendClarificationReply()} disabled={loading || !clarificationReply.trim()}>
                   Send reply
                 </button>
               </div>
@@ -426,7 +452,7 @@ function App() {
             </div>
           )}
           {result?.status === "clarification_needed" && (
-            <p className="hint">Agent is waiting for your reply. Use the input in the left panel and click &quot;Send reply&quot; (or paste an applicant_id UUID to continue).</p>
+            <p className="hint">Agent is waiting for your reply. Use the input in the left panel and click &quot;Send reply&quot; (or enter customer name / applicant_id).</p>
           )}
           {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "overview" && <OverviewTab result={result} />}
           {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "sequence" && <SequenceTab result={result} />}
@@ -442,6 +468,11 @@ function OverviewTab({ result }: { result: AgentResult }) {
   const strengths = analysis.key_strengths || [];
   const risks = analysis.key_risks || [];
   const actions = analysis.next_actions || [];
+
+  const customerInfoUsed = analysis.customer_information_used || [];
+  const analysisFindings = analysis.analysis_findings || [];
+  const finalVerdict = analysis.final_verdict || "";
+  const hasStructuredSuggestion = customerInfoUsed.length > 0 || analysisFindings.length > 0 || finalVerdict;
 
   return (
     <div className="overview">
@@ -466,8 +497,31 @@ function OverviewTab({ result }: { result: AgentResult }) {
       </div>
 
       <details open className="collapse">
-        <summary>LLM Approval Summary</summary>
-        <p>{analysis.approval_summary || result.explanation || "No summary available."}</p>
+        <summary>LLM Suggestion</summary>
+        {hasStructuredSuggestion ? (
+          <div className="llm-suggestion">
+            {customerInfoUsed.length > 0 && (
+              <>
+                <p className="llm-section-title">1. Customer information used to analyze</p>
+                <ul>{customerInfoUsed.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              </>
+            )}
+            {analysisFindings.length > 0 && (
+              <>
+                <p className="llm-section-title">2. Based on this analysis we see</p>
+                <ul>{analysisFindings.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              </>
+            )}
+            {finalVerdict && (
+              <>
+                <p className="llm-section-title">3. Final verdict</p>
+                <p>{finalVerdict}</p>
+              </>
+            )}
+          </div>
+        ) : (
+          <p>{analysis.approval_summary || result.explanation || "No summary available."}</p>
+        )}
       </details>
 
       <details className="collapse">

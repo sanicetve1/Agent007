@@ -12,10 +12,11 @@ from __future__ import annotations
 import copy
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loan_agent.agent.context import AgentContext, IntentOutput
 from loan_agent.agent.state_machine import run_react_loop
+from loan_agent.applicants import resolve_applicants_by_name
 from loan_agent.config import agent_settings
 from loan_agent.tools import (  # noqa: F401 - ensure tools are registered
     analyze_cashflow,
@@ -90,23 +91,47 @@ def run_autonomous_continue(
     max_steps = getattr(agent_settings, "max_steps", 8)
 
     reply = (user_reply or "").strip()
+    applicant_id_resolved: Optional[str] = None
+
     if UUID_PATTERN.match(reply):
+        applicant_id_resolved = reply
+    else:
+        # Resolve by customer name (MVP: unique names or disambiguate by listing)
+        matches: List[Dict[str, Any]] = resolve_applicants_by_name(reply)
+        if len(matches) == 0:
+            _session_store[ctx.session_id] = copy.deepcopy(ctx)
+            return _response_clarification(
+                ctx,
+                clarification_question="No customer found with that name. Please provide a valid customer name or applicant ID (UUID).",
+            )
+        if len(matches) == 1:
+            applicant_id_resolved = matches[0]["applicant_id"]
+        else:
+            _session_store[ctx.session_id] = copy.deepcopy(ctx)
+            names_list = "; ".join(f"{m['full_name']} ({m['applicant_id'][:8]}...)" for m in matches)
+            return _response_clarification(
+                ctx,
+                clarification_question=f"Multiple customers found. Which one? Type the full name or applicant ID: {names_list}",
+                clarification_options=matches,
+            )
+
+    if applicant_id_resolved:
         ctx.intent = IntentOutput(
             intent_type="full_underwriting",
-            entities={"applicant_id": reply, "loan_id": None, "months": 6},
+            entities={"applicant_id": applicant_id_resolved, "loan_id": None, "months": 6},
             needs_clarification=False,
             clarification_question=None,
         )
         run_react_loop(ctx, max_steps=max_steps, model=model, skip_intent=True)
-    else:
-        ctx.user_request = (ctx.user_request or "") + "\nUser: " + reply
-        ctx._prefilled_entities = {}  # type: ignore[attr-defined]
-        run_intent_node_from_runner(ctx, model=model)
-        if ctx.clarification_required:
-            _session_store[ctx.session_id] = copy.deepcopy(ctx)
-            return _response_clarification(ctx)
-        run_react_loop(ctx, max_steps=max_steps, model=model, skip_intent=True)
+        return _response_from_context(ctx, applicant_id_resolved, ctx.loan_id)
 
+    ctx.user_request = (ctx.user_request or "") + "\nUser: " + reply
+    ctx._prefilled_entities = {}  # type: ignore[attr-defined]
+    run_intent_node_from_runner(ctx, model=model)
+    if ctx.clarification_required:
+        _session_store[ctx.session_id] = copy.deepcopy(ctx)
+        return _response_clarification(ctx)
+    run_react_loop(ctx, max_steps=max_steps, model=model, skip_intent=True)
     return _response_from_context(ctx, ctx.applicant_id or "", ctx.loan_id)
 
 
@@ -116,12 +141,17 @@ def run_intent_node_from_runner(ctx: AgentContext, model: str) -> None:
     run_intent_node(ctx, model=model, user_request=ctx.user_request)
 
 
-def _response_clarification(ctx: AgentContext) -> Dict[str, Any]:
+def _response_clarification(
+    ctx: AgentContext,
+    clarification_question: Optional[str] = None,
+    clarification_options: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Return a response indicating clarification is needed (same shape, with status)."""
     return {
         "status": "clarification_needed",
-        "clarification_question": ctx.clarification_question,
+        "clarification_question": clarification_question or ctx.clarification_question,
         "session_id": ctx.session_id,
+        **({"clarification_options": clarification_options} if clarification_options is not None else {}),
         "applicant_id": ctx.applicant_id,
         "overall_risk_level": "medium",
         "recommendation": "conditional",

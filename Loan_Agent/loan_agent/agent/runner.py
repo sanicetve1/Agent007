@@ -87,7 +87,8 @@ def _render_outcome_analysis_with_sdk(
     model: str,
 ) -> Dict[str, Any]:
     """
-    Generate a structured final analysis summary from the final decision payload.
+    Generate a structured LLM Suggestion: customer info used, analysis findings, final verdict.
+    Keeps approval_summary/key_strengths/key_risks for backward compatibility.
     """
     fallback = {
         "approval_summary": payload.get("explanation", ""),
@@ -96,6 +97,9 @@ def _render_outcome_analysis_with_sdk(
         "key_strengths": [],
         "key_risks": payload.get("missing_data", []),
         "next_actions": ["Review tool outputs and missing data before final approval."],
+        "customer_information_used": [],
+        "analysis_findings": [],
+        "final_verdict": payload.get("explanation", ""),
     }
     try:
         from openai import OpenAI
@@ -110,14 +114,16 @@ def _render_outcome_analysis_with_sdk(
                 {
                     "role": "system",
                     "content": (
-                        "You are a senior underwriting analyst. "
-                        "Return STRICT JSON only with keys: "
-                        "approval_summary (string), decision (string), overall_risk_level (string), "
-                        "key_strengths (string array), key_risks (string array), next_actions (string array). "
-                        "In approval_summary, explain in 3-6 sentences how the decision was reached, "
-                        "explicitly referencing credit risk, cashflow, and collateral signals where present. "
-                        "Use key_strengths and key_risks as short bullet-style phrases, suitable for display as a list. "
-                        "Base everything ONLY on the provided tool outputs and fields; do not invent new numbers."
+                        "You are a senior underwriting analyst. Return STRICT JSON only with these keys:\n"
+                        "- customer_information_used (string array): Bullet points listing what customer data was used to analyze. "
+                        "Include: 1) Customer loan data (outstanding amounts, loan type, status), 2) Customer risk profile (credit score, DTI, risk level from tools), "
+                        "3) Income and cashflow (income, expenses, volatility, net cashflow), 4) Any other rules/signals run (e.g. collateral, cashflow stability).\n"
+                        "- analysis_findings (string array): Bullet points of what the analysis shows, e.g. 'Vulnerable to low income volatility', 'Strong collateral coverage', "
+                        "'High DTI concern'. Base only on the provided tool outputs.\n"
+                        "- final_verdict (string): One or two sentences: 'Based on the boundaries defined in our rules, this customer can be provided [approval/conditional/decline].' "
+                        "Reference the policy recommendation.\n"
+                        "- decision (string), overall_risk_level (string), key_strengths (string array), key_risks (string array), next_actions (string array).\n"
+                        "Base everything ONLY on the provided tool outputs; do not invent numbers."
                     ),
                 },
                 {"role": "user", "content": json.dumps(payload)},
@@ -126,14 +132,18 @@ def _render_outcome_analysis_with_sdk(
         text = (response.output_text or "").strip()
         parsed = json.loads(text)
         if isinstance(parsed, dict):
-            return {
+            out = {
                 "approval_summary": str(parsed.get("approval_summary", fallback["approval_summary"])),
                 "decision": str(parsed.get("decision", fallback["decision"])),
                 "overall_risk_level": str(parsed.get("overall_risk_level", fallback["overall_risk_level"])),
                 "key_strengths": list(parsed.get("key_strengths", fallback["key_strengths"])),
                 "key_risks": list(parsed.get("key_risks", fallback["key_risks"])),
                 "next_actions": list(parsed.get("next_actions", fallback["next_actions"])),
+                "customer_information_used": list(parsed.get("customer_information_used", fallback["customer_information_used"])),
+                "analysis_findings": list(parsed.get("analysis_findings", fallback["analysis_findings"])),
+                "final_verdict": str(parsed.get("final_verdict", fallback["final_verdict"])),
             }
+            return out
     except Exception:
         return fallback
     return fallback
