@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from loan_agent.agent.runner import run_underwriting_agent
+from loan_agent.agent import run_autonomous_continue, run_autonomous_underwriting_agent, run_underwriting_agent
+from loan_agent.config import agent_settings
 from loan_agent.db import get_conn
 from loan_agent.tools import (
     analyze_cashflow,
@@ -43,17 +45,36 @@ class AssessCollateralReq(BaseModel):
 
 
 class UnderwritingReq(BaseModel):
-    applicant_id: str
+    applicant_id: Optional[str] = None
     loan_id: Optional[str] = None
     months: int = Field(default=6, ge=1, le=24)
     model: str = "gpt-4.1-mini"
 
 
+class AgentContinueReq(BaseModel):
+    session_id: str
+    user_reply: str
+    model: str = "gpt-4.1-mini"
+
+
 app = FastAPI(title="Loan Agent API", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+def _log_agent_mode() -> None:
+    mode = "autonomous" if agent_settings.enable_autonomy else "deterministic"
+    print(f"Loan Agent API: mode={mode} (ENABLE_AUTONOMY={agent_settings.enable_autonomy})")
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -124,12 +145,43 @@ async def tool_assess_collateral(req: AssessCollateralReq) -> Dict[str, Any]:
 @app.post("/agent/run")
 async def run_agent(req: UnderwritingReq) -> Dict[str, Any]:
     try:
-        return run_underwriting_agent(
-            applicant_id=req.applicant_id,
+        applicant_id = req.applicant_id or ""
+        if agent_settings.enable_autonomy:
+            return run_autonomous_underwriting_agent(
+                applicant_id=applicant_id,
+                loan_id=req.loan_id,
+                months=req.months,
+                model=req.model,
+            )
+        if not applicant_id:
+            raise HTTPException(status_code=400, detail="applicant_id required for deterministic mode")
+        result = run_underwriting_agent(
+            applicant_id=applicant_id,
             loan_id=req.loan_id,
             months=req.months,
             model=req.model,
         )
+        result["agent_mode"] = "deterministic"
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/agent/continue")
+async def agent_continue(req: AgentContinueReq) -> Dict[str, Any]:
+    """Continue after clarification: send session_id and user_reply (e.g. applicant_id UUID or text)."""
+    try:
+        if not agent_settings.enable_autonomy:
+            raise HTTPException(status_code=400, detail="ENABLE_AUTONOMY must be true to use /agent/continue")
+        return run_autonomous_continue(
+            session_id=req.session_id,
+            user_reply=req.user_reply,
+            model=req.model,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

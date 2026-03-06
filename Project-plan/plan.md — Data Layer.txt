@@ -1,0 +1,221 @@
+# plan.md — Data Layer (DB + Seed Data) for Underwriting MVP
+
+## Goal
+Create a minimal but realistic banking underwriting **data layer**:
+- A relational database with 6 tables:
+  - `applicants`
+  - `credit_scores`
+  - `transactions`
+  - `loans`
+  - `collateral`
+  - `documents`
+- Insert **10 clean customers** (no missing/dirty data) with realistic relational coverage.
+- Ensure relations are correct and queries are easy for initial agent testing.
+
+This is **data-layer only** (no agent, no LLM, no FastAPI yet).
+
+---
+
+## Tech Choice (Default)
+Use **PostgreSQL** for realism.
+
+### Local Dev Option A (Recommended): Docker Compose
+- Provide a `docker-compose.yml` that runs Postgres
+- Use env vars for credentials
+- Expose port `5432`
+
+### Local Dev Option B: Local Postgres
+- If Docker not available, provide SQL scripts that can be run on any Postgres instance.
+
+---
+
+## Database Name / Credentials (Safe Defaults)
+- DB: `underwriting_mvp`
+- User: `underwrite_user`
+- Password: `underwrite_pass`
+- Port: `5432`
+
+---
+
+## Schema Requirements
+
+### 1) applicants
+**Purpose:** master entity for customers/applicants.
+
+Columns:
+- `applicant_id` (UUID, PK)
+- `full_name` (TEXT, NOT NULL)
+- `dob` (DATE, NOT NULL)
+- `employment_type` (TEXT, NOT NULL) — values: `salaried`, `self_employed`
+- `annual_income` (NUMERIC, NOT NULL)
+- `kyc_status` (TEXT, NOT NULL) — values: `verified`, `pending`
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+- `updated_at` (TIMESTAMP, NOT NULL, default now)
+
+Indexes:
+- PK on `applicant_id`
+- Optional: index on `kyc_status`
+
+---
+
+### 2) credit_scores
+**Purpose:** store bureau score report for each applicant.
+
+Relationships:
+- 1 applicant → 1 credit score record (for MVP)
+
+Columns:
+- `applicant_id` (UUID, PK + FK → applicants.applicant_id)
+- `bureau_score` (INTEGER, NOT NULL)
+- `bureau_name` (TEXT, NOT NULL) — e.g., `Experian`, `Equifax`, `TransUnion`
+- `report_date` (DATE, NOT NULL)
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+- `updated_at` (TIMESTAMP, NOT NULL, default now)
+
+Constraints:
+- `bureau_score` range check: 300–900 (or 300–850 if you prefer; pick one and enforce)
+
+---
+
+### 3) transactions
+**Purpose:** internal transaction history for underwriting signals.
+
+Relationships:
+- 1 applicant → many transactions
+
+Columns:
+- `txn_id` (UUID, PK)
+- `applicant_id` (UUID, FK → applicants.applicant_id, NOT NULL)
+- `txn_date` (DATE, NOT NULL)
+- `amount` (NUMERIC, NOT NULL) — positive number
+- `txn_type` (TEXT, NOT NULL) — values: `credit`, `debit`
+- `category` (TEXT, NOT NULL) — examples: `salary`, `rent`, `emi`, `utilities`, `groceries`, `misc`
+- `merchant` (TEXT, NULL) — optional, keep simple
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+
+Indexes:
+- index on (`applicant_id`, `txn_date`)
+
+---
+
+### 4) loans
+**Purpose:** existing loan exposure.
+
+Relationships:
+- 1 applicant → many loans
+
+Columns:
+- `loan_id` (UUID, PK)
+- `applicant_id` (UUID, FK → applicants.applicant_id, NOT NULL)
+- `loan_type` (TEXT, NOT NULL) — e.g., `personal_loan`, `home_loan`, `auto_loan`, `credit_card`
+- `principal_amount` (NUMERIC, NOT NULL)
+- `outstanding_amount` (NUMERIC, NOT NULL)
+- `interest_rate` (NUMERIC, NOT NULL)
+- `status` (TEXT, NOT NULL) — values: `active`, `closed`
+- `start_date` (DATE, NOT NULL)
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+
+Constraints:
+- `outstanding_amount <= principal_amount`
+- `interest_rate >= 0`
+
+Indexes:
+- index on `applicant_id`
+
+---
+
+### 5) collateral
+**Purpose:** collateral linked to loans (optional).
+
+Relationships:
+- 1 loan → 0..many collateral rows
+
+Columns:
+- `collateral_id` (UUID, PK)
+- `loan_id` (UUID, FK → loans.loan_id, NOT NULL)
+- `asset_type` (TEXT, NOT NULL) — e.g., `property`, `vehicle`, `fixed_deposit`
+- `asset_value` (NUMERIC, NOT NULL)
+- `valuation_date` (DATE, NOT NULL)
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+
+Indexes:
+- index on `loan_id`
+
+---
+
+### 6) documents
+**Purpose:** simulated documents and extracted values (no PDFs yet).
+
+Relationships:
+- 1 applicant → many documents
+
+Columns:
+- `document_id` (UUID, PK)
+- `applicant_id` (UUID, FK → applicants.applicant_id, NOT NULL)
+- `document_type` (TEXT, NOT NULL) — values: `payslip`, `bank_statement`, `employment_letter`
+- `extracted_income` (NUMERIC, NOT NULL)
+- `verified` (BOOLEAN, NOT NULL)
+- `document_date` (DATE, NOT NULL)
+- `created_at` (TIMESTAMP, NOT NULL, default now)
+
+Indexes:
+- index on `applicant_id`
+
+---
+
+## Seed Data Requirements (10 Applicants)
+
+### Principles
+- Keep data **clean** (no missing values, no contradictory income).
+- Provide **useful diversity** across the 10 profiles.
+- Each applicant should have:
+  - 1 credit score record
+  - 12–24 transactions across last ~6 months (clean, consistent)
+  - 0–2 loans (some have none)
+  - 0–1 collateral records per loan (where relevant)
+  - 1–2 documents with extracted_income aligned to annual_income
+
+### 10 Applicant Profiles (must implement)
+Create 10 applicants that roughly represent:
+
+1. **A1:** High income, high score, low exposure  
+2. **A2:** Medium income, medium score  
+3. **A3:** Low income, high exposure (multiple active loans)  
+4. **A4:** Self-employed, fluctuating monthly credits/debits  
+5. **A5:** No active loans, clean transactions  
+6. **A6:** High outstanding EMIs (emi category debit frequent)  
+7. **A7:** “Recent late payments” simulation — for MVP use a proxy:
+   - include a few `emi` debits that occur later in month (still clean data, but pattern differs)
+8. **A8:** Strong collateral coverage (collateral value >> outstanding)  
+9. **A9:** Weak collateral coverage (collateral value < outstanding)  
+10. **A10:** Borderline approval case (medium score, moderate exposure, tight cashflow)
+
+Notes:
+- Keep `kyc_status` mostly `verified`; optionally set 1 applicant `pending` to test rule gating later.
+- Keep `documents.extracted_income` aligned with `applicants.annual_income/12` (approx) for realism.
+
+---
+
+## Project Outputs (Files to Create)
+
+### Database & Seed
+- `docker-compose.yml` (Postgres)
+- `sql/001_schema.sql` (create tables + constraints + indexes)
+- `sql/002_seed.sql` (insert 10 applicants + related rows)
+
+OR (preferred for maintainability):
+- `scripts/init_db.sh` (runs schema + seed)
+- `scripts/reset_db.sh` (drop + recreate + seed)
+
+### Optional (Nice to Have)
+- `README.md` with instructions to bring DB up and verify with sample queries.
+
+---
+
+## Verification Queries (Acceptance Criteria)
+Provide these SQL queries and ensure they return results:
+
+1) **Count applicants**
+```sql
+SELECT COUNT(*) FROM applicants;
+-- expect: 10

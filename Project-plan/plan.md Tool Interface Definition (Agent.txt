@@ -1,0 +1,129 @@
+## Tool Interface Definition (Agent ↔ Service Layer Contract)
+
+### Goal
+Define a **stable, auditable interface** for agent tools that call our FastAPI service layer.
+Tools are thin wrappers around HTTP endpoints. They must be:
+- deterministic in behavior
+- typed (inputs/outputs)
+- safe (timeouts, retries, error handling)
+- traceable (correlation id, logging)
+
+---
+
+## A) Tool Naming Convention
+Use verb-based names that match business intent.
+
+Data tools:
+- `get_applicant_profile(applicant_id)`
+- `get_credit_score(applicant_id)`
+- `get_transactions(applicant_id, from_date, to_date, limit)`
+- `get_loans(applicant_id, status)`
+- `get_collateral(loan_id)`
+- `get_documents(applicant_id, doc_type)`
+
+Analytics tools:
+- `get_exposure_summary(applicant_id)`
+- `get_income_summary(applicant_id)`
+- `get_monthly_obligations(applicant_id, months)`
+- `get_dti(applicant_id, months)`
+
+Governance tools (hard gates):
+- `check_kyc(applicant_id)`
+- `check_required_data(applicant_id)`
+- `check_policy(applicant_id, months)`
+
+---
+
+## B) Tool Input Contract (Typed + Validated)
+All tools must validate inputs before calling APIs.
+
+Common rules:
+- `applicant_id`: UUID string
+- `loan_id`: UUID string
+- `from_date`, `to_date`: ISO date `YYYY-MM-DD`
+- `months`: integer (allowed: 3, 6, 12) default 6
+- `limit`: integer (1–500) default 200
+- `status`: one of `active|closed|all`
+- `doc_type`: `payslip|bank_statement|employment_letter|all`
+
+---
+
+## C) Tool Output Contract (Stable JSON Shapes)
+Tools must return JSON with consistent structure so the agent can reason reliably.
+
+### Success shape (recommended)
+Return the service JSON as-is, but wrap with metadata:
+
+{
+  "ok": true,
+  "tool": "<tool_name>",
+  "correlation_id": "<id>",
+  "data": { ...service_response... }
+}
+
+### Error shape (mandatory)
+Never throw raw exceptions to the agent. Return:
+
+{
+  "ok": false,
+  "tool": "<tool_name>",
+  "correlation_id": "<id>",
+  "error": {
+    "type": "NOT_FOUND | VALIDATION | TIMEOUT | UPSTREAM | UNKNOWN",
+    "message": "<human-readable>",
+    "status_code": <http_status_if_any>,
+    "details": { ...optional... }
+  }
+}
+
+---
+
+## D) HTTP Calling Rules (Reliability)
+- Base URL via env: `SERVICE_BASE_URL` (e.g., http://localhost:8000)
+- Timeout: 5s (data), 10s (analytics/governance)
+- Retries: max 2 retries ONLY for:
+  - connection errors
+  - 502/503/504
+- No retries for 4xx
+
+Headers:
+- `X-Correlation-Id`: generate if missing (UUID)
+- `Accept: application/json`
+
+---
+
+## E) Tool ↔ Endpoint Mapping
+Each tool maps 1:1 to a service endpoint.
+
+Examples:
+- `get_credit_score(applicant_id)` → `GET /data/credit-score/{applicant_id}`
+- `get_transactions(applicant_id, from_date, to_date, limit)` → `GET /data/transactions/{applicant_id}?from=...&to=...&limit=...`
+- `get_dti(applicant_id, months)` → `GET /analytics/dti/{applicant_id}?months=...`
+- `check_policy(applicant_id, months)` → `GET /governance/policy/{applicant_id}?months=...`
+
+---
+
+## F) Tool Idempotency + Side Effects
+For MVP, all tools are **read-only** and must be idempotent.
+No writes. No mutations. No “update status” tools yet.
+
+(We will add write tools later with stricter governance.)
+
+---
+
+## G) Reference Implementation (Python Tool Wrapper Pattern)
+Implementation must follow this pattern:
+1) validate inputs
+2) call service endpoint
+3) wrap output into success/error shape
+4) log tool call with correlation_id
+
+Each tool file should be small; shared HTTP client lives in `tools/http_client.py`.
+
+---
+
+## H) Acceptance Criteria
+- All tools return success/error shape consistently
+- Correlation id flows from tool → API logs
+- Timeouts and retries behave as specified
+- Agent can safely branch on `ok=true/false` without parsing exceptions

@@ -10,6 +10,7 @@ agentic_app.egg-info/requires.txt
 agentic_app.egg-info/top_level.txt
 agentic_app/agent/__init__.py
 agentic_app/agent/agent.py
+agentic_app/agent/planner.py
 agentic_app/agent/prompt.py
 agentic_app/agent/state.py
 agentic_app/api/__init__.py
@@ -36,3 +37,4 @@ agentic_app/tools/math/multiply.py
 agentic_app/tools/math/subtract.py
 tests/test_agent_with_fake_llm.py
 tests/test_math_tools.py
+tests/test_planning_graph.py

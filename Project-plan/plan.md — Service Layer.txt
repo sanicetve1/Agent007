@@ -1,0 +1,254 @@
+# plan.md — Service Layer (APIs) for Underwriting MVP
+
+## Goal
+Build a **service/API layer** on top of the existing Postgres data layer (`underwriting_mvp`) to expose:
+1) **Data Retrieval Services (Deterministic)**
+2) **Analytical Services (Model-Based)**
+3) **Governance Services (Rule Enforcement)**
+
+✅ These APIs will be called by agent tools later.  
+❌ Do NOT build LLM/interpretive endpoints in this step (that stays as agent-side tools for now).
+
+---
+
+## Tech Stack
+- **FastAPI** (Python)
+- **psycopg / asyncpg + SQLAlchemy** (choose one; keep it simple)
+- Config via `.env`
+- Logging enabled for every request + DB query timing (basic)
+
+---
+
+## Architecture
+Agent Tools (later) → **Service Layer (this)** → Postgres
+
+Service boundaries:
+- `data_services`: read-only, deterministic, auditable
+- `analytics_services`: computed metrics, deterministic formulas (for MVP)
+- `governance_services`: hard pass/fail checks; never “LLM-decided”
+
+---
+
+## Folder Structure
+Create:
+- `service/`
+  - `app/`
+    - `main.py`
+    - `config.py`
+    - `db.py`
+    - `models/` (optional if using ORM)
+    - `repositories/`
+      - `applicants_repo.py`
+      - `credit_repo.py`
+      - `transactions_repo.py`
+      - `loans_repo.py`
+      - `collateral_repo.py`
+      - `documents_repo.py`
+    - `services/`
+      - `data_service.py`
+      - `analytics_service.py`
+      - `governance_service.py`
+    - `routers/`
+      - `health.py`
+      - `data.py`
+      - `analytics.py`
+      - `governance.py`
+    - `schemas/`
+      - `data_schemas.py`
+      - `analytics_schemas.py`
+      - `governance_schemas.py`
+  - `tests/`
+    - `test_health.py`
+    - `test_data_endpoints.py`
+    - `test_analytics_endpoints.py`
+    - `test_governance_endpoints.py`
+  - `.env.example`
+  - `requirements.txt`
+  - `README.md`
+
+---
+
+## Config
+`.env` variables:
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+
+Add `/health` endpoint to confirm service is running.
+
+---
+
+## API Design (Endpoints)
+
+### 0) Health
+- `GET /health`
+  - returns `{ "status": "ok" }`
+
+---
+
+## 1) Data Retrieval APIs (Deterministic)
+
+### Applicant Profile
+- `GET /data/applicants/{applicant_id}`
+  - returns applicant record
+
+### Credit Bureau Score
+- `GET /data/credit-score/{applicant_id}`
+  - returns credit score record
+
+### Transactions (time window)
+- `GET /data/transactions/{applicant_id}?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=200`
+  - returns list of transactions, sorted desc by date
+
+### Loans (existing exposure)
+- `GET /data/loans/{applicant_id}?status=active|closed|all`
+  - returns list of loans
+
+### Collateral by Loan
+- `GET /data/collateral/{loan_id}`
+  - returns collateral rows for the loan (possibly empty)
+
+### Documents by Applicant
+- `GET /data/documents/{applicant_id}?type=payslip|bank_statement|employment_letter|all`
+  - returns list of documents
+
+---
+
+## 2) Analytical APIs (Model-Based) — MVP Formulas
+These endpoints compute metrics using deterministic logic from DB data.
+
+### Exposure Summary
+- `GET /analytics/exposure/{applicant_id}`
+  - returns:
+    - `total_active_outstanding`
+    - `active_loan_count`
+    - breakdown by loan_type
+
+### Income Summary
+- `GET /analytics/income/{applicant_id}`
+  - uses:
+    - applicant annual_income
+    - documents extracted_income (latest doc)
+  - returns:
+    - `annual_income`
+    - `monthly_income_estimate`
+    - `income_source` = `applicant_profile` or `latest_document`
+
+### Monthly Obligations Estimate (simple)
+- `GET /analytics/monthly-obligations/{applicant_id}?months=6`
+  - MVP rule:
+    - derive from transactions where `category='emi'` in last N months (average per month)
+  - returns:
+    - `avg_monthly_emi_debit`
+
+### DTI (Debt-to-Income)
+- `GET /analytics/dti/{applicant_id}?months=6`
+  - formula:
+    - `DTI = avg_monthly_emi_debit / monthly_income_estimate`
+  - returns:
+    - `dti_ratio` (0..1+)
+    - inputs used (income, obligations)
+
+*(Note: PD/LGD models not in this step. Keep analytics deterministic + simple.)*
+
+---
+
+## 3) Governance / Rule Enforcement APIs — Hard Gates
+These endpoints MUST return clear pass/fail and reasons.
+
+### KYC Check
+- `GET /governance/kyc/{applicant_id}`
+  - returns:
+    - `status`: `pass|fail`
+    - `kyc_status`: `verified|pending`
+    - `reasons`: list
+
+### Mandatory Data Check (MVP)
+- `GET /governance/required-data/{applicant_id}`
+  - checks:
+    - applicant exists
+    - credit score exists
+    - at least 12 transactions exist
+    - at least 1 income document exists (or accept applicant income only; choose and document)
+  - returns:
+    - `status`: `pass|fail`
+    - `missing`: list of missing items
+
+### Policy Threshold Check (MVP)
+- `GET /governance/policy/{applicant_id}?months=6`
+  - uses analytics results:
+    - credit score threshold (e.g., >= 650)
+    - DTI threshold (e.g., <= 0.45)
+    - optional: max active outstanding (e.g., <= 200000)
+  - returns:
+    - `status`: `pass|fail`
+    - `reasons`: list
+    - includes computed metrics snapshot (score, dti, exposure)
+
+---
+
+## Error Handling (Must)
+- Return `404` if applicant_id/loan_id not found
+- Return `422` for invalid query params (date formats, months)
+- Return structured error body:
+  - `{ "error_code": "...", "message": "...", "details": {...} }`
+
+---
+
+## Observability (MVP)
+- Log each request:
+  - endpoint, params, response status, latency
+- Log DB query timing (simple)
+- Add correlation id header support:
+  - if request has `X-Correlation-Id`, propagate it into logs; else generate one
+
+---
+
+## Security (MVP Minimal)
+- No auth for local MVP (for now)
+- Add placeholder middleware for future auth:
+  - `TODO: JWT / mTLS / API gateway`
+
+---
+
+## Test Plan (Acceptance Criteria)
+Use pytest + FastAPI TestClient.
+
+### Required tests
+1) `/health` returns ok
+2) For a known seeded applicant:
+   - `/data/applicants/{id}` returns 200 and correct keys
+   - `/data/credit-score/{id}` returns 200
+   - `/data/transactions/{id}` returns >= 12 rows in default window (or with query dates)
+   - `/data/loans/{id}` returns list (possibly empty)
+3) Analytics:
+   - `/analytics/exposure/{id}` returns totals and counts
+   - `/analytics/dti/{id}` returns ratio and inputs
+4) Governance:
+   - `/governance/kyc/{id}` returns pass/fail depending on seed
+   - `/governance/policy/{id}` returns pass/fail and reasons
+
+Definition of Done:
+- Service starts locally
+- All endpoints work against seeded DB
+- Tests pass
+- README includes:
+  - how to run service
+  - how to set env vars
+  - sample curl commands for 1 applicant
+
+---
+
+## README Content Requirements
+Include:
+- Setup steps
+- Run commands
+- 5 example curl calls:
+  - applicant profile
+  - credit score
+  - transactions
+  - dti
+  - policy check
+- Note: “Interpretive tools (LLM document understanding) will be implemented as agent-side tools later.”

@@ -7,6 +7,8 @@ Loan_Agent/.env.*
 !Loan_Agent/.env.example
 agent-ui/node_modules/
 agent-ui/dist/
+Loan_Agent/loan-ui/node_modules/
+Loan_Agent/loan-ui/dist/
 *.pyc
 *.pyo
 *.pyd

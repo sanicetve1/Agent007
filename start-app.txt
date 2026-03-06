@@ -1,0 +1,38 @@
+uv run python -m agentic_app.app "add 2 and 3"
+
+uv run uvicorn agentic_app.api.server:app --reload --host 0.0.0.0 --port 8000
+
+docker exec -it loan-postgres psql -U admin -d db
+
+Open pgAdmin
+URL: http://localhost:5050
+Login:
+Email: admin@loanagent.com
+Password: admin123
+
+start loan agent
+cd d:\Projects\Agent007\Loan_Agent
+uv run --with fastapi --with "uvicorn[standard]" --with "psycopg[binary]" --with python-dotenv --with openai uvicorn loan_agent.api.server:app --reload --host 0.0.0.0 --port 8001
+
+
+start UI for loan agent 
+cd d:\Projects\Agent007\agent-ui
+npm install
+npm run dev
+
+
+$staged = git diff --cached --name-only
+foreach ($f in $staged) {
+  rg -n -i "(api[_-]?key|openai[_-]?api[_-]?key|sk-[A-Za-z0-9]{20,}|token|secret|password\s*[:=])" "$f"
+}
+
+math agent UI start up.
+=======================
+cd D:\Projects\Agent007
+git checkout b573094 -- agent-ui
+cd agent-ui
+npm install
+npm run dev
+
+run loan agent - UI and FastAPI
+uv run --with fastapi --with "uvicorn[standard]" --with "psycopg[binary]" --with python-dotenv --with openai uvicorn loan_agent.api.server:app --reload --host 0.0.0.0 --port 8001

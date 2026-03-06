@@ -6,7 +6,7 @@ services:
     container_name: loan-postgres
     environment:
       POSTGRES_USER: admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
       POSTGRES_DB: loan_db
     ports:
       - "5432:5432"
@@ -18,7 +18,7 @@ services:
     container_name: loan-pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@loanagent.com
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-change_me}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
     ports:
       - "5050:80"
     volumes:

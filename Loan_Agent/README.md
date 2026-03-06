@@ -58,6 +58,9 @@ LOAN_DB_PORT=5432
 LOAN_DB_NAME=loan_db
 LOAN_DB_USER=admin
 LOAN_DB_PASSWORD=change_me
+
+# Agent mode: false = deterministic pipeline (fixed tool order); true = autonomous ReAct agent (stub until implemented)
+ENABLE_AUTONOMY=false
 ```
 
 ## Start Database + GUI
@@ -133,11 +136,24 @@ Agent runtime behavior:
 - Marks `tool_failed` and `missing_data` if any step fails
 - Returns final structured JSON plus explanation
 
+## Autonomous ReAct agent (ENABLE_AUTONOMY=true)
+
+When `ENABLE_AUTONOMY=true` in `.env`, `/agent/run` uses the ReAct loop instead of the fixed pipeline:
+
+- **Intent** → extract intent and entities (or ask for clarification if e.g. `applicant_id` missing).
+- **Planning** → build tool horizon from registry (no fixed order).
+- **Router** → pick one tool per step; **Observation** → update context; **Reasoning** → set `goal_met` / confidence.
+- **Decision** → deterministic policy + LLM explanation only.
+
+Flow: Intent → Planning → [Router → Tool (with retry) → Observation → Reasoning] until `goal_met` or `AGENT_MAX_STEPS` → Decision.  
+Response shape is the same as the deterministic runner, plus `agent_mode: "autonomous"` and `agent_trace` (intent, plan, tool, reasoning, decision steps) for the UI. Checkpoint logging at each step; optional persistence can be added via env.
+
 ## Run Loan Agent API (for React UI)
 
-From `Loan_Agent/`:
+**You must run from the `Loan_Agent/` directory** so the `loan_agent` package is on the path:
 
 ```powershell
+cd Loan_Agent
 uv run --with fastapi --with "uvicorn[standard]" --with "psycopg[binary]" --with python-dotenv --with openai uvicorn loan_agent.api.server:app --reload --host 0.0.0.0 --port 8001
 ```
 

@@ -1,0 +1,154 @@
+## Autonomy Boundaries (What the Agent Can vs Cannot Decide)
+
+### Goal
+Prevent “glorified workflow” *and* prevent unsafe autonomy.
+Define exactly:
+- what the agent may choose dynamically,
+- what must be enforced deterministically,
+- what must never be skipped,
+- what must be logged for audit.
+
+Think of this as the **cognitive control policy** for the system.
+
+---
+
+## 1) Decision Ownership Model
+
+### A) Agent-Owned Decisions (Allowed Autonomy)
+The agent may decide:
+- **which data retrieval tools to call** and in what order (runtime, context-driven)
+- whether to **retry** a call after transient failures (within tool policy)
+- which **analytics tools** to compute next (DTI vs exposure first, etc.)
+- whether it has **sufficient information** to produce a recommendation
+- whether to request **additional information** (e.g., “need latest payslip”)
+- which explanation template to use when communicating decisions
+
+Constraints:
+- Agent autonomy exists only within **read-only toolset** (MVP).
+- Agent output is a **recommendation**, not final approval (MVP).
+
+---
+
+### B) System-Owned Decisions (No Autonomy)
+The system (deterministic services) must decide:
+- KYC pass/fail status from stored KYC flags
+- Required-data completeness checks (hard validation)
+- Policy threshold outcomes (hard rules)
+- Exposure, DTI calculations (deterministic formula outputs from analytics services)
+
+The agent can call these checks but cannot override them.
+
+---
+
+### C) Human-Owned Decisions (Escalation)
+A human reviewer decides when:
+- governance checks fail but a manual exception might be allowed
+- data is inconsistent (future noisy-data phase)
+- high-risk borderline decisions require review
+
+For MVP, represent this as an outcome state: `manual_review_required`.
+
+---
+
+## 2) Mandatory Gates (Must Never Be Skipped)
+Before the agent produces a “final recommendation,” the following must run:
+
+1) `check_kyc(applicant_id)`  
+2) `check_required_data(applicant_id)`  
+3) `check_policy(applicant_id, months)` *(or at least policy thresholds subset for MVP)*
+
+Enforcement mechanism:
+- Implement a **server-side gate** or a final orchestration step that verifies these calls occurred and passed.
+- The agent is allowed to reorder work, but cannot bypass gates.
+
+---
+
+## 3) Allowed Flexibility (Agent Can Reorder/Defer)
+The agent is allowed to:
+- compute exposure first, then DTI, or vice versa
+- proceed with partial analytics if some optional data is missing
+- defer certain analyses and return later (e.g., collateral fetch after loan list)
+- stop early if a mandatory gate fails (fast-fail)
+
+---
+
+## 4) Disallowed Autonomy (Must Not Happen)
+The agent must NOT:
+- approve/deny a loan purely on its own text reasoning
+- change DB records or “fix data”
+- invent missing values (no hallucinated income/scores)
+- override governance outcomes
+- call external networks or unknown tools (tools must be allow-listed)
+
+---
+
+## 5) “Recommendation vs Decision” Policy
+For MVP:
+- Agent output type must be one of:
+  - `recommend_approve`
+  - `recommend_reject`
+  - `recommend_manual_review`
+- Final “decision” is reserved for:
+  - deterministic policy engine OR
+  - human review step
+
+The agent must include:
+- `supporting_evidence`: tool outputs used
+- `assumptions`: any assumptions (should be minimal in MVP)
+- `missing_info`: if any
+
+---
+
+## 6) Audit & Trace Requirements (Non-Negotiable)
+For every agent run, log:
+- `correlation_id`
+- tool calls made (tool name, params, timestamps, status)
+- gate checks and results
+- final recommendation and rationale
+- version stamps:
+  - service version
+  - tool version
+  - policy thresholds version (even if hardcoded in MVP)
+
+Storage for MVP:
+- log to stdout + file
+- (optional) persist to `agent_runs` table later
+
+---
+
+## 7) Failure Behavior (Deterministic)
+Define consistent outcomes:
+
+### Tool/Service Failure
+- If a **data tool** fails transiently: retry as per tool policy
+- If still failing: output `recommend_manual_review` with reason `data_unavailable`
+
+### Governance Failure
+- If KYC fails: hard stop → `recommend_reject` or `recommend_manual_review` (choose policy)
+- If required data fails: request missing docs → `recommend_manual_review`
+
+### Policy Failure
+- If policy fails: `recommend_reject` (or manual review depending on rule)
+- Agent must not “argue around” the failure.
+
+---
+
+## 8) Minimum Autonomy Configuration (MVP Default)
+- Allowed: dynamic ordering of data + analytics calls
+- Required: governance gates must pass before recommendation
+- Disallowed: any write/update actions
+- Output: recommendation only
+
+This ensures:
+- real agentic flexibility (runtime planning)
+- enterprise safety (hard gates)
+- auditability (traceable execution)
+
+---
+
+## Definition of Done
+- Autonomy boundaries documented here are enforced in code:
+  - mandatory gate checks present and non-bypassable
+  - tool allow-list enforced
+  - agent outputs conform to recommendation policy
+  - trace logs produced for every run
