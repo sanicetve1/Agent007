@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from loan_agent.agent import run_autonomous_continue, run_autonomous_underwriting_agent, run_underwriting_agent
+from loan_agent.agent import run_autonomous_continue, run_autonomous_underwriting_agent, run_customer_chat, run_underwriting_agent
 from loan_agent.config import agent_settings
 from loan_agent.db import get_conn
 from loan_agent.tools import (
@@ -54,6 +54,13 @@ class UnderwritingReq(BaseModel):
 class AgentContinueReq(BaseModel):
     session_id: str
     user_reply: str
+    model: str = "gpt-4.1-mini"
+
+
+class AgentChatReq(BaseModel):
+    applicant_id: str
+    message: str
+    session_id: Optional[str] = None
     model: str = "gpt-4.1-mini"
 
 
@@ -178,6 +185,31 @@ async def agent_continue(req: AgentContinueReq) -> Dict[str, Any]:
         return run_autonomous_continue(
             session_id=req.session_id,
             user_reply=req.user_reply,
+            model=req.model,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/agent/chat")
+async def agent_chat(req: AgentChatReq) -> Dict[str, Any]:
+    """
+    Customer-context chat endpoint.
+
+    Uses the autonomous ReAct agent in `customer_chat` mode so the agent can
+    answer focused questions about a specific applicant, using tools when
+    needed. One logical chat session per applicant (per client) is tracked via
+    session_id.
+    """
+    try:
+        if not agent_settings.enable_autonomy:
+            raise HTTPException(status_code=400, detail="ENABLE_AUTONOMY must be true to use /agent/chat")
+        return run_customer_chat(
+            applicant_id=req.applicant_id,
+            message=req.message,
+            session_id=req.session_id,
             model=req.model,
         )
     except HTTPException:

@@ -149,6 +149,59 @@ def _render_outcome_analysis_with_sdk(
     return fallback
 
 
+def _render_chat_answer_with_sdk(
+    question: str,
+    payload: Dict[str, Any],
+    model: str,
+) -> str:
+    """
+    Generate a natural-language answer for customer chat, grounded in tool
+    outputs / underwriting signals.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        # Fallback: very simple textual answer using existing explanation.
+        base = payload.get("explanation") or ""
+        if not base:
+            base = "I do not have enough structured data to answer in detail."
+        return (
+            f"Here is what I can say based on the available underwriting data:\n\n"
+            f"{base}\n\n"
+            f"(Install the openai package to enable richer, question-specific chat answers.)"
+        )
+
+    try:
+        client = OpenAI()
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a customer insights assistant for retail lending. "
+                        "Answer the user's question ONLY using the structured data provided. "
+                        "If the question cannot be answered exactly, say so and provide the closest facts. "
+                        "Do not invent numbers or products; do not guess."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "question": question,
+                            "underwriting_context": payload,
+                        }
+                    ),
+                },
+            ],
+        )
+        text = (response.output_text or "").strip()
+        return text or ""
+    except Exception:
+        return ""
+
+
 def run_underwriting_agent(
     applicant_id: str,
     loan_id: Optional[str] = None,

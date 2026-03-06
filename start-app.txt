@@ -36,3 +36,6 @@ npm run dev
 
 run loan agent - UI and FastAPI
 uv run --with fastapi --with "uvicorn[standard]" --with "psycopg[binary]" --with python-dotenv --with openai uvicorn loan_agent.api.server:app --reload --host 0.0.0.0 --port 8001
+
+
+Get-Content D:\Projects\Agent007\Loan_Agent\DB\seed_test_cases.sql -Raw | docker exec -i loan-postgres psql -U admin -d loan_db

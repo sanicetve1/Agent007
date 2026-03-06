@@ -45,6 +45,7 @@ type AgentTraceStep = {
 };
 
 type ClarificationOption = { applicant_id: string; full_name: string };
+type ChatMessage = { from: "user" | "agent"; text: string };
 
 type AgentResult = {
   applicant_id?: string;
@@ -64,6 +65,13 @@ type AgentResult = {
 
 const API_BASE = "http://localhost:8001";
 
+const TOOL_ICONS: Record<string, string> = {
+  calculate_credit_risk: "💳",
+  analyze_cashflow: "📊",
+  list_applicant_loans: "🏦",
+  assess_collateral: "🏠",
+};
+
 function App() {
   const [applicants, setApplicants] = useState<Applicant[]>([]);
   const [selectedApplicant, setSelectedApplicant] = useState("");
@@ -76,6 +84,15 @@ function App() {
   const [result, setResult] = useState<AgentResult | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "sequence" | "json">("overview");
   const [clarificationReply, setClarificationReply] = useState("");
+  const [toast, setToast] = useState<{ id: number; type: "error" | "info"; message: string } | null>(null);
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [chatByCustomer, setChatByCustomer] = useState<Record<string, { sessionId?: string; messages: ChatMessage[] }>>({});
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const toastIdRef = React.useRef(0);
+  const selectedApplicantRef = React.useRef(selectedApplicant);
+  const chatEndRef = React.useRef<HTMLDivElement | null>(null);
+  selectedApplicantRef.current = selectedApplicant;
 
   useEffect(() => {
     async function loadApplicants() {
@@ -84,7 +101,7 @@ function App() {
         if (!resp.ok) throw new Error(`Failed to load applicants (${resp.status})`);
         const data: Applicant[] = await resp.json();
         setApplicants(data);
-        if (data.length > 0) setSelectedApplicant(data[0].applicant_id);
+        if (data.length > 0) setSelectedApplicant((prev) => prev || data[0].applicant_id);
       } catch (err: any) {
         setError(err.message ?? "Failed to load applicants");
       }
@@ -92,10 +109,41 @@ function App() {
     loadApplicants();
   }, []);
 
+  /** Fetch loans for the selected customer only (for dropdown); does not set agent result. */
+  async function fetchLoansForCustomer(applicantId: string) {
+    try {
+      const data = await callApi("/tools/list_applicant_loans", { applicant_id: applicantId });
+      if (selectedApplicantRef.current !== applicantId) return;
+      const choices = data.loan_choices || [];
+      setLoans(choices);
+      setSelectedLoan(choices.length ? choices[0].loan_id : "");
+    } catch {
+      if (selectedApplicantRef.current !== applicantId) return;
+      setLoans([]);
+      setSelectedLoan("");
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedApplicant) {
+      setLoans([]);
+      setSelectedLoan("");
+      return;
+    }
+    fetchLoansForCustomer(selectedApplicant);
+  }, [selectedApplicant]);
+
   const selectedApplicantObject = useMemo(
     () => applicants.find((x) => x.applicant_id === selectedApplicant) || null,
     [applicants, selectedApplicant]
   );
+  const activeChat = selectedApplicant ? chatByCustomer[selectedApplicant] || { sessionId: undefined, messages: [] } : { sessionId: undefined, messages: [] };
+
+  function showToast(type: "error" | "info", message: string) {
+    toastIdRef.current += 1;
+    setToast({ id: toastIdRef.current, type, message });
+    setTimeout(() => setToast((t) => (t?.id === toastIdRef.current ? null : t)), 5000);
+  }
 
   async function callApi(path: string, payload: Record<string, any>) {
     const resp = await fetch(`${API_BASE}${path}`, {
@@ -110,6 +158,22 @@ function App() {
     return resp.json();
   }
 
+  function clearSession() {
+    setResult(null);
+    setClarificationReply("");
+    setError(null);
+    setAgentRunning(false);
+    if (selectedApplicant) {
+      setChatByCustomer((prev) => {
+        const existing = prev[selectedApplicant] || { sessionId: prev[selectedApplicant]?.sessionId, messages: [] };
+        return {
+          ...prev,
+          [selectedApplicant]: { ...existing, messages: [] },
+        };
+      });
+    }
+  }
+
   async function runCreditRisk() {
     setLoading(true);
     setError(null);
@@ -117,7 +181,9 @@ function App() {
       const data = await callApi("/tools/calculate_credit_risk", { applicant_id: selectedApplicant });
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
@@ -130,7 +196,9 @@ function App() {
       const data = await callApi("/tools/analyze_cashflow", { applicant_id: selectedApplicant, months });
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
@@ -149,7 +217,9 @@ function App() {
       }
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
@@ -158,6 +228,7 @@ function App() {
   async function runCollateral() {
     if (!selectedLoan) {
       setError("Select a loan first.");
+      showToast("error", "Select a loan first.");
       return;
     }
     setLoading(true);
@@ -169,7 +240,9 @@ function App() {
       });
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
@@ -178,6 +251,7 @@ function App() {
   async function runUseCasePreScreen() {
     setLoading(true);
     setError(null);
+    setAgentRunning(true);
     try {
       const data = await callApi("/agent/run", {
         applicant_id: selectedApplicant,
@@ -189,15 +263,19 @@ function App() {
       }
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
+      setAgentRunning(false);
     }
   }
 
   async function runUseCaseFull() {
     setLoading(true);
     setError(null);
+    setAgentRunning(true);
     try {
       const data = await callApi("/agent/run", {
         applicant_id: selectedApplicant,
@@ -206,9 +284,12 @@ function App() {
       });
       setResult(data);
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
+      setAgentRunning(false);
     }
   }
 
@@ -218,26 +299,32 @@ function App() {
     setError(null);
     setResult(null);
     setClarificationReply("");
+    setAgentRunning(true);
     try {
       const data = await callApi("/agent/run", {
         applicant_id: null,
         months,
       });
       setResult(data);
+      if (data?.status === "clarification_needed") showToast("info", "Agent needs more information.");
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
+      setAgentRunning(false);
     }
   }
 
-  /** Send reply after clarification_needed (e.g. paste applicant_id or answer in text). */
+  /** Send reply after clarification_needed (customer name or applicant_id). */
   async function sendClarificationReply(replyOverride?: string) {
     const sessionId = result?.session_id;
     const reply = (replyOverride ?? clarificationReply).trim();
     if (!sessionId || !reply) return;
     setLoading(true);
     setError(null);
+    setAgentRunning(true);
     try {
       const data = await callApi("/agent/continue", {
         session_id: sessionId,
@@ -246,9 +333,12 @@ function App() {
       setResult(data);
       if (!replyOverride) setClarificationReply("");
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
+      setAgentRunning(false);
     }
   }
 
@@ -268,199 +358,304 @@ function App() {
         : { warning: "No active loan found for collateral check." };
       setResult({ credit_risk: credit, cashflow_signal: cashflow, loans: loanList, collateral_status: collateral });
     } catch (err: any) {
-      setError(err.message ?? "Request failed");
+      const msg = err.message ?? "Request failed";
+      setError(msg);
+      showToast("error", msg);
     } finally {
       setLoading(false);
     }
   }
 
+  async function sendChatMessage() {
+    if (!selectedApplicant || !chatInput.trim() || chatLoading) return;
+    const customerId = selectedApplicant;
+    const message = chatInput.trim();
+    const existing = chatByCustomer[customerId] || { sessionId: undefined, messages: [] };
+
+    // Optimistically append user message
+    setChatByCustomer((prev) => ({
+      ...prev,
+      [customerId]: {
+        sessionId: existing.sessionId,
+        messages: [...(prev[customerId]?.messages || []), { from: "user", text: message }],
+      },
+    }));
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const data = await callApi("/agent/chat", {
+        applicant_id: customerId,
+        message,
+        session_id: existing.sessionId || null,
+      });
+      if (data.status && data.status !== "ok") {
+        const errMsg = data.error || "Chat request failed";
+        showToast("error", errMsg);
+        setChatLoading(false);
+        return;
+      }
+      const answer: string = data.answer || "I could not generate an answer for this question.";
+      const sessionId: string | undefined = data.session_id;
+      setChatByCustomer((prev) => {
+        const base = prev[customerId] || { sessionId, messages: [] };
+        return {
+          ...prev,
+          [customerId]: {
+            sessionId: sessionId || base.sessionId,
+            messages: [...base.messages, { from: "agent", text: answer }],
+          },
+        };
+      });
+    } catch (err: any) {
+      const msg = err.message ?? "Chat request failed";
+      showToast("error", msg);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [selectedApplicant, activeChat.messages.length]);
+
+  const stepsTotal = result?.tool_call_sequence?.length ?? result?.agent_trace?.length ?? 0;
+
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Loan Agent Tool Tester</h1>
-        <p>Test underwriting tools and use-cases quickly.</p>
+        <div className="app-header-left">
+          <h1>Loan Agent</h1>
+          {result?.session_id && (
+            <span className="session-pill">
+              Session: <span>{String(result.session_id).slice(0, 8)}…</span>
+            </span>
+          )}
+        </div>
       </header>
 
       <main className="app-main">
         <section className="panel controls">
-          <div className="field-grid">
-            <label className="label">
-              Applicant
-              <select
-                value={selectedApplicant}
-                onChange={(e) => setSelectedApplicant(e.target.value)}
-                disabled={loading || applicants.length === 0}
+          <h2 style={{ margin: "0 0 0.5rem", fontSize: "1rem" }}>Customers</h2>
+          <div className="selector-grid customer-list">
+            {applicants.map((a) => (
+              <div
+                key={a.applicant_id}
+                className={`card selector-card ${selectedApplicant === a.applicant_id ? "selected" : ""}`}
+                onClick={() => !loading && setSelectedApplicant(a.applicant_id)}
               >
-                {applicants.map((a) => (
-                  <option key={a.applicant_id} value={a.applicant_id}>
-                    {a.full_name} ({a.applicant_id.slice(0, 8)}...)
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="label">
-              Months
-              <input
-                type="number"
-                min={1}
-                max={24}
-                value={months}
-                onChange={(e) => setMonths(Number(e.target.value))}
-                disabled={loading}
-              />
-            </label>
-            <label className="label">
-              Threshold Ratio
-              <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={thresholdRatio}
-                onChange={(e) => setThresholdRatio(Number(e.target.value))}
-                disabled={loading}
-              />
-            </label>
-            <label className="label">
-              Loan
-              <select value={selectedLoan} onChange={(e) => setSelectedLoan(e.target.value)} disabled={loading}>
-                <option value="">Select loan</option>
-                {loans.map((l) => (
-                  <option key={l.loan_id} value={l.loan_id}>
-                    {l.loan_type} - {l.outstanding_amount}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {selectedApplicantObject && (
-            <div className="meta">
-              Selected: <strong>{selectedApplicantObject.full_name}</strong> | Income:{" "}
-              {selectedApplicantObject.annual_income} | KYC: {selectedApplicantObject.kyc_status}
-            </div>
-          )}
-
-          <div className="action-group">
-            <h2>Primary Flow</h2>
-            <div className="button-row">
-              <button onClick={runListLoans} disabled={loading || !selectedApplicant}>
-                1. Fetch loans
-              </button>
-              <button onClick={runUseCaseFull} disabled={loading || !selectedApplicant}>
-                2. Analyze applicant
-              </button>
-            </div>
-          </div>
-
-          <details className="action-group testing">
-            <summary>Testing & debug tools</summary>
-            <div className="testing-inner">
-              <h3>Tool Tests</h3>
-              <div className="button-row">
-                <button onClick={runCreditRisk} disabled={loading || !selectedApplicant}>
-                  calculate_credit_risk
-                </button>
-                <button onClick={runCashflow} disabled={loading || !selectedApplicant}>
-                  analyze_cashflow
-                </button>
-                <button onClick={runListLoans} disabled={loading || !selectedApplicant}>
-                  list_applicant_loans
-                </button>
-                <button onClick={runCollateral} disabled={loading || !selectedLoan}>
-                  assess_collateral
-                </button>
-                <button onClick={runAllTools} disabled={loading || !selectedApplicant}>
-                  Run All 3 Tools
-                </button>
+                <div className="card-name">{a.full_name}</div>
+                <div className="card-summary">
+                  Income: {a.annual_income.toLocaleString()} · KYC: {a.kyc_status}
+                </div>
               </div>
-
-              <h3>Use Cases</h3>
+            ))}
+          </div>
+          <details className="action-group testing" style={{ marginTop: "1rem" }}>
+            <summary>Debug &amp; testing</summary>
+            <div className="testing-inner">
+              <button className="btn-secondary" onClick={runTestClarification} disabled={loading}>
+                Test clarification (no customer)
+              </button>
               <div className="button-row">
-                <button onClick={runUseCasePreScreen} disabled={loading || !selectedApplicant}>
-                  Pre-screen (agent run)
-                </button>
-                <button onClick={runUseCaseFull} disabled={loading || !selectedApplicant}>
-                  Full underwriting
-                </button>
-                <button onClick={runTestClarification} disabled={loading}>
-                  Test clarification (no applicant)
-                </button>
+                <button onClick={runCreditRisk} disabled={loading || !selectedApplicant}>💳 Credit risk</button>
+                <button onClick={runCashflow} disabled={loading || !selectedApplicant}>📊 Cashflow</button>
+                <button onClick={() => selectedApplicant && fetchLoansForCustomer(selectedApplicant)} disabled={loading || !selectedApplicant}>🏦 Refresh loans</button>
+                <button onClick={runCollateral} disabled={loading || !selectedLoan}>🏠 Collateral</button>
               </div>
             </div>
           </details>
-
-          {result?.status === "clarification_needed" && (
-            <div className="meta" style={{ marginTop: "1rem", padding: "0.75rem", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8 }}>
-              <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>Agent asks for more information</p>
-              <p style={{ margin: 0, fontSize: "0.9rem" }}>{result.clarification_question}</p>
-              {result.clarification_options && result.clarification_options.length > 0 && (
-                <div style={{ marginTop: "0.5rem" }}>
-                  <p style={{ margin: "0 0 0.35rem", fontSize: "0.85rem", color: "#64748b" }}>Choose customer:</p>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                    {result.clarification_options.map((opt) => (
-                      <button
-                        key={opt.applicant_id}
-                        type="button"
-                        onClick={() => sendClarificationReply(opt.applicant_id)}
-                        disabled={loading}
-                        style={{ padding: "0.35rem 0.6rem", fontSize: "0.85rem", cursor: loading ? "not-allowed" : "pointer" }}
-                      >
-                        {opt.full_name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
-                <input
-                  type="text"
-                  placeholder="Customer name or applicant_id (UUID)"
-                  value={clarificationReply}
-                  onChange={(e) => setClarificationReply(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendClarificationReply()}
-                  style={{ flex: 1, padding: "0.4rem 0.6rem" }}
-                />
-                <button onClick={() => sendClarificationReply()} disabled={loading || !clarificationReply.trim()}>
-                  Send reply
-                </button>
-              </div>
-            </div>
-          )}
-
-          {error && <div className="error">{error}</div>}
+          {error && <div className="error" style={{ marginTop: "0.75rem" }}>{error}</div>}
         </section>
 
         <section className="panel results">
-          <div className="results-header">
-            <h2>Result</h2>
-            <div className="tab-row">
-              <button className={activeTab === "overview" ? "tab active" : "tab"} onClick={() => setActiveTab("overview")}>
-                Overview
-              </button>
-              <button className={activeTab === "sequence" ? "tab active" : "tab"} onClick={() => setActiveTab("sequence")}>
-                Agent Sequence
-              </button>
-              <button className={activeTab === "json" ? "tab active" : "tab"} onClick={() => setActiveTab("json")}>
-                Raw JSON
-              </button>
-            </div>
-          </div>
+          {selectedApplicantObject ? (
+            <>
+              <div className="customer-context">
+                <h2 style={{ margin: "0 0 0.75rem", fontSize: "1.05rem" }}>Customer context</h2>
+                <div className="demographics-card">
+                  <div className="demographics-row">
+                    <span className="demographics-k">Name</span>
+                    <span className="demographics-v">{selectedApplicantObject.full_name}</span>
+                  </div>
+                  <div className="demographics-row">
+                    <span className="demographics-k">Annual income</span>
+                    <span className="demographics-v">{selectedApplicantObject.annual_income.toLocaleString()}</span>
+                  </div>
+                  <div className="demographics-row">
+                    <span className="demographics-k">KYC status</span>
+                    <span className={`badge ${selectedApplicantObject.kyc_status === "verified" ? "info" : "warning"}`}>{selectedApplicantObject.kyc_status}</span>
+                  </div>
+                  <div className="demographics-row">
+                    <span className="demographics-k">Applicant ID</span>
+                    <span className="demographics-v mono">{selectedApplicantObject.applicant_id.slice(0, 8)}…</span>
+                  </div>
+                </div>
+                <div className="context-form">
+                  <label className="label">
+                    Loan
+                    <select value={selectedLoan} onChange={(e) => setSelectedLoan(e.target.value)} disabled={loading}>
+                      <option value="">No loans</option>
+                      {loans.map((l) => (
+                        <option key={l.loan_id} value={l.loan_id}>
+                          {l.loan_type} · {l.outstanding_amount.toLocaleString()} ({l.status})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="label">
+                    Months
+                    <input
+                      type="number"
+                      min={1}
+                      max={24}
+                      value={months}
+                      onChange={(e) => setMonths(Number(e.target.value))}
+                      disabled={loading}
+                    />
+                  </label>
+                  <label className="label">
+                    Threshold ratio
+                    <input
+                      type="number"
+                      min={0.1}
+                      step={0.1}
+                      value={thresholdRatio}
+                      onChange={(e) => setThresholdRatio(Number(e.target.value))}
+                      disabled={loading}
+                    />
+                  </label>
+                </div>
+                <div className="context-actions">
+                  <button className="btn-accent" onClick={runUseCaseFull} disabled={loading}>
+                    Analyze applicant
+                  </button>
+                </div>
 
-          {!result && <p className="hint">Run a tool or use-case to see output.</p>}
-          {result?.status === "error" && (
-            <div className="error">
-              {result.message || result.error || "An error occurred."}
+              <div className="chat-card">
+                <h3 style={{ margin: "0 0 0.5rem", fontSize: "0.95rem" }}>Chat about this customer</h3>
+                <div className="chat-thread">
+                  {activeChat.messages.length === 0 ? (
+                    <p className="hint">Ask a question about this customer (e.g. last cash inflow, current loans).</p>
+                  ) : (
+                    activeChat.messages.map((m, idx) => (
+                      <div key={idx} className={`chat-message ${m.from === "user" ? "user" : "agent"}`}>
+                        <div className="chat-bubble">{m.text}</div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+                <div className="chat-input-row">
+                  <input
+                    type="text"
+                    placeholder="Ask a question about this customer"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
+                    disabled={chatLoading || !selectedApplicant}
+                  />
+                  <button onClick={sendChatMessage} disabled={chatLoading || !selectedApplicant || !chatInput.trim()}>
+                    {chatLoading ? "Sending..." : "Send"}
+                  </button>
+                </div>
+                {chatLoading && <div className="chat-typing">Agent is thinking…</div>}
+              </div>
+              </div>
+
+              {result?.status === "clarification_needed" && (
+                <div className="clarification-block" style={{ marginTop: "1rem" }}>
+                  <p>Agent asks for more information</p>
+                  <p style={{ margin: 0, fontSize: "0.9rem" }}>{result.clarification_question}</p>
+                  {result.clarification_options && result.clarification_options.length > 0 && (
+                    <div className="clarification-options">
+                      {result.clarification_options.map((opt) => (
+                        <button key={opt.applicant_id} type="button" onClick={() => sendClarificationReply(opt.applicant_id)} disabled={loading}>
+                          {opt.full_name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="clarification-input-row">
+                    <input
+                      type="text"
+                      placeholder="Customer name or applicant_id (UUID)"
+                      value={clarificationReply}
+                      onChange={(e) => setClarificationReply(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && sendClarificationReply()}
+                    />
+                    <button onClick={() => sendClarificationReply()} disabled={loading || !clarificationReply.trim()}>Send reply</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="results-header" style={{ marginTop: "1.25rem" }}>
+                <h2>Agent output</h2>
+                <div className="tab-row">
+                  <button className={activeTab === "overview" ? "tab active" : "tab"} onClick={() => setActiveTab("overview")}>Overview</button>
+                  <button className={activeTab === "sequence" ? "tab active" : "tab"} onClick={() => setActiveTab("sequence")}>Agent Sequence</button>
+                  <button className={activeTab === "json" ? "tab active" : "tab"} onClick={() => setActiveTab("json")}>Raw JSON</button>
+                </div>
+              </div>
+
+              {loading && agentRunning && (
+                <div className="agent-running">
+                  <div className="spinner-crystal" />
+                  <p>Agent running…</p>
+                  <span className="progress-steps">Working on tools</span>
+                </div>
+              )}
+
+              {!loading && result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "overview" && (
+                <div className="completion-badge">
+                  <span className="check">✓</span> Complete
+                  {stepsTotal > 0 && ` · ${stepsTotal} step${stepsTotal !== 1 ? "s" : ""}`}
+                </div>
+              )}
+
+              {!result && !loading && <p className="hint">Select loan, months, and threshold above, then click &quot;Analyze applicant&quot;.</p>}
+              {result?.status === "error" && (
+                <div className="error">{result.message || result.error || "An error occurred."}</div>
+              )}
+              {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "overview" && <OverviewTab result={result} />}
+              {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "sequence" && <SequenceTab result={result} />}
+              {result && activeTab === "json" && <pre>{JSON.stringify(result, null, 2)}</pre>}
+            </>
+          ) : (
+            <div className="customer-context-empty">
+              <p className="hint">Select a customer from the list to see their details and run the agent.</p>
             </div>
           )}
-          {result?.status === "clarification_needed" && (
-            <p className="hint">Agent is waiting for your reply. Use the input in the left panel and click &quot;Send reply&quot; (or enter customer name / applicant_id).</p>
-          )}
-          {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "overview" && <OverviewTab result={result} />}
-          {result && result.status !== "clarification_needed" && result.status !== "error" && activeTab === "sequence" && <SequenceTab result={result} />}
-          {result && activeTab === "json" && <pre>{JSON.stringify(result, null, 2)}</pre>}
         </section>
       </main>
+
+      <footer className="app-footer">
+        <div className="footer-actions">
+          <button className="btn-accent" onClick={runUseCaseFull} disabled={loading || !selectedApplicant}>
+            Run Agent
+          </button>
+          <button className="btn-secondary" onClick={clearSession}>
+            Clear session
+          </button>
+        </div>
+      </footer>
+
+      {toast && (
+        <div className="toast-container">
+          <div className={`toast ${toast.type}`}>{toast.message}</div>
+        </div>
+      )}
     </div>
   );
+}
+
+function riskBadgeClass(level: string): "info" | "warning" | "risk" {
+  const l = (level || "").toLowerCase();
+  if (l.includes("high") || l.includes("decline") || l.includes("risk")) return "risk";
+  if (l.includes("medium") || l.includes("conditional") || l.includes("caution")) return "warning";
+  return "info";
 }
 
 function OverviewTab({ result }: { result: AgentResult }) {
@@ -474,6 +669,9 @@ function OverviewTab({ result }: { result: AgentResult }) {
   const finalVerdict = analysis.final_verdict || "";
   const hasStructuredSuggestion = customerInfoUsed.length > 0 || analysisFindings.length > 0 || finalVerdict;
 
+  const decision = analysis.decision || result.recommendation || "N/A";
+  const riskLevel = analysis.overall_risk_level || result.overall_risk_level || "N/A";
+
   return (
     <div className="overview">
       {result.agent_mode && (
@@ -484,15 +682,19 @@ function OverviewTab({ result }: { result: AgentResult }) {
       <div className="summary-grid">
         <div className="summary-card">
           <div className="k">Decision</div>
-          <div className="v">{analysis.decision || result.recommendation || "N/A"}</div>
+          <div className="v">
+            <span className={`badge ${riskBadgeClass(decision)}`}>{decision}</span>
+          </div>
         </div>
         <div className="summary-card">
           <div className="k">Overall Risk</div>
-          <div className="v">{analysis.overall_risk_level || result.overall_risk_level || "N/A"}</div>
+          <div className="v">
+            <span className={`badge ${riskBadgeClass(riskLevel)}`}>{riskLevel}</span>
+          </div>
         </div>
         <div className="summary-card">
           <div className="k">Tool Failures</div>
-          <div className="v">{result.tool_failed ? "Yes" : "No"}</div>
+          <div className="v">{result.tool_failed ? <span className="badge risk">Yes</span> : <span className="badge info">No</span>}</div>
         </div>
       </div>
 
@@ -579,9 +781,10 @@ function SequenceTab({ result }: { result: AgentResult }) {
           const toolIdx = t.step_type === "observation" ? getObservationToolIndex(idx) : -1;
           const tool = toolIdx >= 0 ? toolSequence[toolIdx] : null;
           return (
-            <details key={`${t.step_index}-${t.step_type}-${idx}`} className="collapse" open={t.step_index === 1}>
+            <details key={`${t.step_index}-${t.step_type}-${idx}`} className="collapse sequence-step" style={{ animationDelay: `${idx * 0.05}s` }} open={t.step_index === 1}>
               <summary>
                 <span className="step">Step {t.step_index}</span>
+                {tool && <span className="tool-icon">{TOOL_ICONS[tool.tool] ?? "🔧"}</span>}
                 <span className="tool">{stepLabel(t)}</span>
                 {tool && (
                   <>
@@ -634,10 +837,11 @@ function SequenceTab({ result }: { result: AgentResult }) {
           Mode: <strong>Deterministic</strong> (fixed pipeline)
         </p>
       )}
-      {toolSequence.map((item) => (
-        <details key={`${item.step}-${item.tool}`} className="collapse" open={item.step === 1}>
+      {toolSequence.map((item, idx) => (
+        <details key={`${item.step}-${item.tool}`} className="collapse sequence-step" style={{ animationDelay: `${idx * 0.05}s` }} open={item.step === 1}>
           <summary>
             <span className="step">Step {item.step}</span>
+            <span className="tool-icon">{TOOL_ICONS[item.tool] ?? "🔧"}</span>
             <span className="tool">{item.tool}</span>
             <span className={`badge ${item.status === "success" ? "ok" : "fail"}`}>{item.status}</span>
             <span className="attempts">attempts: {item.attempts}</span>

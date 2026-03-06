@@ -27,8 +27,11 @@ from loan_agent.tools import (  # noqa: F401 - ensure tools are registered
 
 logger = logging.getLogger(__name__)
 
-# In-memory session store for clarification flow (production would use Redis/DB)
+# In-memory session stores (production would use Redis/DB)
+# - _session_store: for clarification flow (underwriting)
+# - _chat_session_store: for per-customer chat sessions
 _session_store: Dict[str, AgentContext] = {}
+_chat_session_store: Dict[str, AgentContext] = {}
 
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -133,6 +136,63 @@ def run_autonomous_continue(
         return _response_clarification(ctx)
     run_react_loop(ctx, max_steps=max_steps, model=model, skip_intent=True)
     return _response_from_context(ctx, ctx.applicant_id or "", ctx.loan_id)
+
+
+def run_customer_chat(
+    applicant_id: str,
+    message: str,
+    session_id: Optional[str] = None,
+    model: str = "gpt-4.1-mini",
+) -> Dict[str, Any]:
+    """
+    Customer-context chat entrypoint (autonomous).
+
+    Each applicant can have a separate chat session. We run a lightweight ReAct
+    loop in `customer_chat` mode so tools can be called when needed, and the
+    Decision node produces a chat-style answer in ctx.chat_answer.
+    """
+    if not applicant_id:
+        return {"status": "error", "error": "missing_applicant_id", "message": "applicant_id is required for chat."}
+
+    ctx: Optional[AgentContext]
+    if session_id:
+        ctx = _chat_session_store.get(session_id)
+        if ctx is not None:
+            ctx = copy.deepcopy(ctx)
+    else:
+        ctx = None
+
+    if ctx is None:
+        # New chat session for this applicant.
+        ctx = AgentContext(
+            user_request=message,
+        )
+        session_id = ctx.session_id
+    else:
+        # Append to existing conversation in a simple way.
+        ctx.user_request = message
+
+    # Seed intent/entities so the graph knows this is a customer_chat flow.
+    ctx.intent = IntentOutput(
+        intent_type="customer_chat",
+        entities={"applicant_id": applicant_id, "loan_id": None, "months": 6},
+        needs_clarification=False,
+        clarification_question=None,
+    )
+    ctx.clarification_required = False
+    ctx.clarification_question = None
+
+    max_steps = getattr(agent_settings, "max_steps", 4)
+    run_react_loop(ctx, max_steps=max_steps, model=model, skip_intent=True)
+
+    # Persist updated chat context.
+    _chat_session_store[ctx.session_id] = copy.deepcopy(ctx)
+
+    return {
+        "status": "ok",
+        "session_id": ctx.session_id,
+        "answer": ctx.chat_answer or ctx.llm_explanation or "I could not generate an answer for this question.",
+    }
 
 
 def run_intent_node_from_runner(ctx: AgentContext, model: str) -> None:

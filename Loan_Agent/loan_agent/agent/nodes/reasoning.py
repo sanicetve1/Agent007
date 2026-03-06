@@ -18,6 +18,9 @@ INTENT_KEY_SIGNALS: Dict[str, List[str]] = {
     "full_underwriting": ["credit_risk", "cashflow_signal", "collateral_status"],
     "credit_only": ["credit_risk"],
     "general_question": [],
+    # In customer_chat mode we don't require a fixed set of signals; a single
+    # relevant tool call is usually enough to answer the question.
+    "customer_chat": [],
 }
 
 

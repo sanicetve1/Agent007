@@ -65,6 +65,12 @@ class AgentContext:
     llm_explanation: str = ""
     llm_outcome_analysis: Dict[str, Any] = field(default_factory=dict)
 
+    # --- Chat-specific ---
+    # When using the agent in customer chat mode, nodes can populate a
+    # natural-language answer here based on tools and signals, instead of
+    # returning a full underwriting decision.
+    chat_answer: str = ""
+
     # --- Trace and control ---
     trace: List[TraceStep] = field(default_factory=list)
     agent_state: str = "intent"  # intent | planning | routing | tool | observing | reasoning | decision | done | clarification

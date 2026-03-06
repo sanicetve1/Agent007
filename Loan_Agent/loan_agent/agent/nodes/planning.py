@@ -23,7 +23,16 @@ INTENT_TOOL_HORIZON = {
         "assess_collateral",
     ],
     "credit_only": ["calculate_credit_risk"],
+    # general_question uses no tools by default (LLM-only answer)
     "general_question": [],
+    # customer_chat uses tools opportunistically to answer questions about a
+    # specific applicant (credit, cashflow, loans, collateral).
+    "customer_chat": [
+        "calculate_credit_risk",
+        "analyze_cashflow",
+        "list_applicant_loans",
+        "assess_collateral",
+    ],
 }
 
 
