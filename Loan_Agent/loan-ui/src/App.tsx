@@ -63,7 +63,8 @@ type AgentResult = {
   [k: string]: any;
 };
 
-const API_BASE = "http://localhost:8001";
+// VITE_API_BASE set at build time: /api for production (nginx proxy), http://localhost:8001 for dev
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8001";
 
 const TOOL_ICONS: Record<string, string> = {
   calculate_credit_risk: "💳",
@@ -125,6 +126,14 @@ function App() {
   }
 
   useEffect(() => {
+    // When switching customer, reset per-run UI state so context is clear.
+    setResult(null);
+    setClarificationReply("");
+    setError(null);
+    setAgentRunning(false);
+    setActiveTab("overview");
+    setChatInput("");
+
     if (!selectedApplicant) {
       setLoans([]);
       setSelectedLoan("");
@@ -672,6 +681,25 @@ function OverviewTab({ result }: { result: AgentResult }) {
   const decision = analysis.decision || result.recommendation || "N/A";
   const riskLevel = analysis.overall_risk_level || result.overall_risk_level || "N/A";
 
+  const baseExplanation = analysis.approval_summary || result.explanation || finalVerdict;
+  const effectiveCustomerInfoUsed =
+    customerInfoUsed.length > 0
+      ? customerInfoUsed
+      : baseExplanation
+      ? [
+          "Customer loan data (outstanding amounts, loan type, status).",
+          "Customer risk profile (credit score, DTI, risk level from tools).",
+          "Income and cashflow (income, expenses, volatility, net cashflow).",
+          "Other underwriting rules and signals (e.g. collateral coverage, cashflow stability).",
+        ]
+      : [];
+  const effectiveAnalysisFindings =
+    analysisFindings.length > 0
+      ? analysisFindings
+      : baseExplanation
+      ? [baseExplanation]
+      : [];
+
   return (
     <div className="overview">
       {result.agent_mode && (
@@ -702,18 +730,22 @@ function OverviewTab({ result }: { result: AgentResult }) {
         <summary>LLM Suggestion</summary>
         {hasStructuredSuggestion ? (
           <div className="llm-suggestion">
-            {customerInfoUsed.length > 0 && (
-              <>
-                <p className="llm-section-title">1. Customer information used to analyze</p>
-                <ul>{customerInfoUsed.map((s, i) => <li key={i}>{s}</li>)}</ul>
-              </>
-            )}
-            {analysisFindings.length > 0 && (
-              <>
-                <p className="llm-section-title">2. Based on this analysis we see</p>
-                <ul>{analysisFindings.map((s, i) => <li key={i}>{s}</li>)}</ul>
-              </>
-            )}
+            <>
+              <p className="llm-section-title">1. Customer information used to analyze</p>
+              {effectiveCustomerInfoUsed.length > 0 ? (
+                <ul>{effectiveCustomerInfoUsed.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              ) : (
+                <p className="muted">No structured customer information details available.</p>
+              )}
+            </>
+            <>
+              <p className="llm-section-title">2. Based on this analysis we see</p>
+              {effectiveAnalysisFindings.length > 0 ? (
+                <ul>{effectiveAnalysisFindings.map((s, i) => <li key={i}>{s}</li>)}</ul>
+              ) : (
+                <p className="muted">No structured findings available.</p>
+              )}
+            </>
             {finalVerdict && (
               <>
                 <p className="llm-section-title">3. Final verdict</p>

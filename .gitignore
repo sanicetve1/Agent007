@@ -1,7 +1,10 @@
 __pycache__/
 .pytest_cache/
 .venv/
+# Env and secrets (API keys, DB passwords)
 .env
+.env.*
+!Loan_Agent/.env.example
 Loan_Agent/.env
 Loan_Agent/.env.*
 !Loan_Agent/.env.example

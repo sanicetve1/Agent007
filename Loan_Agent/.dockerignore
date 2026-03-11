@@ -1,0 +1,17 @@
+# API build
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+*.egg-info
+.git
+*.md
+loan-ui
+DB
+docker-compose*.yaml
+.env
+.env.*

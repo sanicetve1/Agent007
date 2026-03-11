@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
@@ -12,7 +10,44 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./DB/init.sql:/docker-entrypoint-initdb.d
+      - ./DB/init.sql/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./DB/seed_test_cases.sql:/docker-entrypoint-initdb.d/02_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d loan_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: loan-api
+    env_file: .env
+    environment:
+      LOAN_DB_HOST: postgres
+      LOAN_DB_PORT: "5432"
+      LOAN_DB_NAME: loan_db
+      LOAN_DB_USER: admin
+      LOAN_DB_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ui:
+    build:
+      context: ./loan-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: /api
+    container_name: loan-ui
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: loan-pgadmin
@@ -25,6 +60,8 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - postgres
+    profiles:
+      - tools
 
 volumes:
   postgres_data:
